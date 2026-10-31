@@ -18,11 +18,11 @@ data class ApiProviderTemplate(
             ApiProviderTemplate("Cerebras", "Inferência rápida; créditos de teste", "https://api.cerebras.ai/v1"),
             ApiProviderTemplate("Mistral AI", "Modelos Mistral; modo gratuito limitado", "https://api.mistral.ai/v1"),
             ApiProviderTemplate("Hugging Face", "Diversos modelos; pequenos créditos mensais", "https://router.huggingface.co/v1"),
-            ApiProviderTemplate("OpenCode Zen", "Modelos de programação e opções gratuitas", "https://opencode.ai/zen/v1"),
+            ApiProviderTemplate("OpenCode Zen", "Modelos de programação; consulte saldo e cobrança", "https://opencode.ai/zen/v1"),
             ApiProviderTemplate("DeepSeek", "Modelos DeepSeek; verifique saldo e preços", "https://api.deepseek.com"),
-            ApiProviderTemplate("Together AI", "Modelos abertos e comerciais; verifique créditos", "https://api.together.ai/v1"),
+            ApiProviderTemplate("Together AI", "Modelos abertos; chave pode exigir recarga inicial", "https://api.together.ai/v1"),
             ApiProviderTemplate("Fireworks AI", "Inferência de modelos abertos; verifique créditos", "https://api.fireworks.ai/inference/v1"),
-            ApiProviderTemplate("SiliconFlow", "Modelos de IA; disponibilidade por região", "https://api.siliconflow.com/v1"),
+            ApiProviderTemplate("SiliconFlow", "Modelos de IA; créditos de teste e uso por região", "https://api.siliconflow.com/v1"),
             ApiProviderTemplate("DeepInfra", "Modelos hospedados; verifique créditos", "https://api.deepinfra.com/v1/openai"),
         )
     }
