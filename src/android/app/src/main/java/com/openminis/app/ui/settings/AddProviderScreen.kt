@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.auth.OpenAIOAuthManager
 import com.openminis.app.auth.OpenRouterOAuthManager
+import com.openminis.app.data.model.ApiProviderTemplate
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
@@ -102,6 +103,8 @@ fun AddProviderScreen(
     var selectedVoiceTemplate by remember {
         mutableStateOf<com.openminis.app.data.model.VoiceProviderTemplate?>(null)
     }
+    // Presets share the original OpenAI-compatible transport and stored ProviderType.
+    var selectedApiTemplate by remember { mutableStateOf<ApiProviderTemplate?>(null) }
 
     // Unified back handler: reuse each step's onBack so predictive-back gesture
     // and the top-bar arrow behave identically (go back to prior step, not exit).
@@ -115,10 +118,11 @@ fun AddProviderScreen(
             AddProviderStep.CONFIGURE -> {
                 // Voice-template entry skipped the credential step entirely —
                 // back returns straight to the type/template list.
-                if (selectedVoiceTemplate != null) {
+                if (selectedVoiceTemplate != null || selectedApiTemplate != null) {
                     step = AddProviderStep.CHOOSE_TYPE
                     selectedType = null
                     selectedVoiceTemplate = null
+                    selectedApiTemplate = null
                 } else {
                     val creds = availableCredentials(selectedType!!)
                     if (creds.size == 1) {
@@ -140,6 +144,8 @@ fun AddProviderScreen(
         AddProviderStep.CHOOSE_TYPE -> ChooseProviderScreen(
             onBack = handleBack,
             onSelect = { type ->
+                selectedApiTemplate = null
+                selectedVoiceTemplate = null
                 selectedType = type
                 val creds = availableCredentials(type)
                 if (creds.size == 1) {
@@ -151,10 +157,18 @@ fun AddProviderScreen(
                 }
             },
             onSelectVoiceTemplate = { template ->
+                selectedApiTemplate = null
                 // Mirror iOS applyVoiceTemplate: pick the underlying protocol,
                 // force API-key credential, jump straight to configure.
                 selectedVoiceTemplate = template
                 selectedType = template.providerType
+                selectedCredential = ProviderCredential.apiKey
+                step = AddProviderStep.CONFIGURE
+            },
+            onSelectApiTemplate = { template ->
+                selectedVoiceTemplate = null
+                selectedApiTemplate = template
+                selectedType = ProviderType.openAI
                 selectedCredential = ProviderCredential.apiKey
                 step = AddProviderStep.CONFIGURE
             },
@@ -172,6 +186,7 @@ fun AddProviderScreen(
             credentialType = selectedCredential!!,
             providerRepository = providerRepository,
             voiceTemplate = selectedVoiceTemplate,
+            apiTemplate = selectedApiTemplate,
             onBack = handleBack,
             onSaved = onSaved,
         )
@@ -251,6 +266,7 @@ private fun ChooseProviderScreen(
     onBack: () -> Unit,
     onSelect: (ProviderType) -> Unit,
     onSelectVoiceTemplate: (com.openminis.app.data.model.VoiceProviderTemplate) -> Unit = {},
+    onSelectApiTemplate: (ApiProviderTemplate) -> Unit = {},
 ) {
     SettingsScaffold(
         title = stringResource(R.string.provider_list_add_provider),
@@ -317,6 +333,23 @@ private fun ChooseProviderScreen(
                     iconColor = iconColor,
                     onClick = { onSelect(type) },
                     showDivider = index < offeredTypes.size - 1,
+                )
+            }
+        }
+
+        // Shortcut entries for API-key providers; existing providers are unchanged.
+        SettingsSection(
+            header = "OUTROS PROVEDORES (CHAVE API)",
+            footer = "Cole sua chave API. Alguns serviços oferecem uso gratuito limitado; outros exigem créditos.",
+        ) {
+            ApiProviderTemplate.all.forEachIndexed { index, template ->
+                SettingsRow(
+                    title = template.name,
+                    subtitle = template.description,
+                    icon = Icons.Default.Cloud,
+                    iconColor = Color(0xFF42A5F5),
+                    onClick = { onSelectApiTemplate(template) },
+                    showDivider = index < ApiProviderTemplate.all.lastIndex,
                 )
             }
         }
@@ -436,6 +469,7 @@ private fun ConfigureProviderScreen(
     credentialType: ProviderCredential,
     providerRepository: ProviderRepository,
     voiceTemplate: com.openminis.app.data.model.VoiceProviderTemplate? = null,
+    apiTemplate: ApiProviderTemplate? = null,
     onBack: () -> Unit,
     onSaved: () -> Unit,
 ) {
@@ -443,7 +477,7 @@ private fun ConfigureProviderScreen(
     // A voice template preseeds its vendor name instead of the protocol name.
     val config by providerRepository.config.collectAsState()
     val defaultLabel = remember(config) {
-        val baseName = voiceTemplate?.name ?: providerType.displayName
+        val baseName = apiTemplate?.name ?: voiceTemplate?.name ?: providerType.displayName
         val existingLabels = config.instances.map { it.label }.toSet()
         if (baseName !in existingLabels) baseName
         else {
@@ -471,10 +505,10 @@ private fun ConfigureProviderScreen(
         if (!labelEdited) label = defaultLabel
     }
     var apiKey by remember { mutableStateOf("") }
-    var customBaseURL by remember { mutableStateOf(voiceTemplate?.baseURL ?: "") }
+    var customBaseURL by remember { mutableStateOf(apiTemplate?.baseURL ?: voiceTemplate?.baseURL ?: "") }
 
     SettingsScaffold(
-        title = stringResource(R.string.add_provider_configure_provider, providerType.displayName),
+        title = stringResource(R.string.add_provider_configure_provider, apiTemplate?.name ?: providerType.displayName),
         onBack = onBack,
     ) {
         // Identity section — Label only. Each provider auto-suggests a
@@ -506,7 +540,8 @@ private fun ConfigureProviderScreen(
                 customBaseURL = customBaseURL,
                 onCustomBaseURLChange = { customBaseURL = it },
                 providerRepository = providerRepository,
-                initialAppendV1 = voiceTemplate?.appendV1,
+                initialAppendV1 = apiTemplate?.appendV1 ?: voiceTemplate?.appendV1,
+                requireApiKey = apiTemplate != null,
                 onSaved = onSaved,
             )
             ProviderCredential.oauth -> OAuthConfigSection(
@@ -533,6 +568,7 @@ private fun ColumnScope.ApiKeyConfigSection(
     // [T-android-provider-voice] Voice templates carry their own v1-suffix
     // policy (e.g. MiMo appends /v1, ElevenLabs must not). null = type default.
     initialAppendV1: Boolean? = null,
+    requireApiKey: Boolean = false,
     onSaved: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -544,7 +580,7 @@ private fun ColumnScope.ApiKeyConfigSection(
     var useResponsesAPI by remember { mutableStateOf(false) }
 
     // ── Credential ──────────────────────────────────────────────────────
-    val keyPlaceholder = when (providerType) {
+    val keyPlaceholder = if (requireApiKey) "Cole sua chave API aqui" else when (providerType) {
         ProviderType.anthropic -> "sk-ant-..."
         ProviderType.openAI -> "sk-..."
         ProviderType.gemini -> "Gemini API Key..."
@@ -697,7 +733,7 @@ private fun ColumnScope.ApiKeyConfigSection(
         // (custom base URL filled in) — ollama / LM Studio / LiteLLM /
         // private relays need no key. Official endpoints and OAuth flows
         // keep requiring a credential. Mirrors iOS AddProviderView.
-        enabled = apiKey.isNotBlank() || (
+        enabled = apiKey.isNotBlank() || (!requireApiKey &&
             customBaseURL.isNotBlank() &&
                 (providerType == ProviderType.openAI || providerType == ProviderType.anthropic)
         ),
