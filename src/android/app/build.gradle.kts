@@ -88,6 +88,9 @@ android {
     buildTypes {
         getByName("debug") {
             buildConfigField("boolean", "DEV_TOOLS", "true")
+            // ALTIV test APK can coexist with the user's official OpenMinis.
+            // Avoid uninstall/data loss caused by different debug signing keys.
+            applicationIdSuffix = ".altiv"
         }
         // `perf`: the debug variant minus android:debuggable. ART refuses to
         // AOT-compile a debuggable app (`cmd package compile -m speed`

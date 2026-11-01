@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -108,6 +109,13 @@ fun ModelGroupDetailScreen(
     val focusManager = LocalFocusManager.current
     var strategy by remember { mutableStateOf(group.strategy) }
     var fallbackStrategy by remember { mutableStateOf(group.fallbackStrategy) }
+    // A scan is always opt-in: it sends real, small API requests that may use quota.
+    val smartRouterContext = LocalContext.current.applicationContext
+    var smartRouterTesting by remember(group.id) { mutableStateOf(false) }
+    var smartRouterConfirm by remember(group.id) { mutableStateOf(false) }
+    var smartRouterResults by remember(group.id) {
+        mutableStateOf<List<SmartRouterProbe.Result>>(emptyList())
+    }
     // T312: Session Defaults — keyed on group.id so navigating to another
     // group via NavBackStack rebuilds these from the new group's persisted
     // values. Using `group` as key would also re-fire on every config
@@ -246,6 +254,43 @@ fun ModelGroupDetailScreen(
                             },
                             showDivider = false,
                         )
+                    }
+                }
+            }
+
+            // ALTIV Smart Router: opt-in one-at-a-time probes, no background polling.
+            item("altiv_smart_router") {
+                SettingsSection(
+                    header = "ALTIV SMART ROUTER",
+                    footer = "Testes reais podem consumir sua cota ou créditos. Só inclua modelos cujo preço você conhece. O fallback das conversas continua automático.",
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        MinisButton(
+                            onClick = { smartRouterConfirm = true },
+                            enabled = !smartRouterTesting && group.memberEntryIds.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (smartRouterTesting) "Testando modelos..." else "Verificar modelos e organizar prioridade")
+                        }
+                        if (smartRouterTesting || smartRouterResults.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Verificados: ${smartRouterResults.size} de até ${minOf(group.memberEntryIds.size, SmartRouterProbe.MAX_PROBES)}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            smartRouterResults.forEach { result ->
+                                val status = when (result.state) {
+                                    SmartRouterProbe.State.AVAILABLE -> "✓"
+                                    SmartRouterProbe.State.UNAVAILABLE -> "×"
+                                    SmartRouterProbe.State.SKIPPED -> "–"
+                                }
+                                Text(
+                                    "$status ${result.label}: ${result.note}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -629,6 +674,48 @@ fun ModelGroupDetailScreen(
 
     quotaSheetInstanceId?.let { id ->
         com.openminis.app.ui.quota.QuotaDetailSheet(instanceId = id, onDismiss = { quotaSheetInstanceId = null }, halfHeight = false)
+    }
+
+    if (smartRouterConfirm) {
+        AlertDialog(
+            onDismissRequest = { smartRouterConfirm = false },
+            title = { Text("Verificar modelos do grupo?") },
+            text = { Text("Serão realizadas até ${SmartRouterProbe.MAX_PROBES} chamadas pequenas, em sequência, usando suas chaves API. Isso pode consumir cota gratuita ou créditos pagos. Os modelos que responderem serão priorizados, sem excluir os demais. Não serão testadas contas OAuth.") },
+            confirmButton = {
+                MinisTextButton(onClick = {
+                    smartRouterConfirm = false
+                    smartRouterTesting = true
+                    smartRouterResults = emptyList()
+                    // Snapshot avoids changing the scan if the group is edited meanwhile.
+                    val entries = providerRepository.availableMemberEntries(group)
+                        .take(SmartRouterProbe.MAX_PROBES)
+                    coroutineScope.launch {
+                        try {
+                            for (entry in entries) {
+                                val result = SmartRouterProbe.check(smartRouterContext, providerRepository, entry)
+                                smartRouterResults = smartRouterResults + result
+                            }
+                            if (smartRouterResults.any { it.state == SmartRouterProbe.State.AVAILABLE }) {
+                                val latest = providerRepository.group(groupId)
+                                if (latest != null) {
+                                    val prioritized = SmartRouterPlanner.prioritize(
+                                        latest.memberEntryIds.toList(), smartRouterResults)
+                                    memberIds = prioritized
+                                    strategy = RoutingStrategy.fallback
+                                    providerRepository.updateGroup(latest.copy(
+                                        strategy = RoutingStrategy.fallback,
+                                        memberEntryIds = prioritized.toMutableList(),
+                                    ))
+                                }
+                            }
+                        } finally {
+                            smartRouterTesting = false
+                        }
+                    }
+                }) { Text("Iniciar testes") }
+            },
+            dismissButton = { MinisTextButton(onClick = { smartRouterConfirm = false }) { Text("Cancelar") } },
+        )
     }
 
     // Confirm remove model from group

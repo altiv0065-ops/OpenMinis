@@ -1,0 +1,117 @@
+name: ALTIV OpenMinis — Android APK (teste)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/altiv-smart-router-probe
+
+permissions:
+  contents: read
+
+concurrency:
+  group: altiv-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Obter código e dependências nativas
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Go 1.25
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      # The Ubuntu runner already includes Android command-line tools.
+      # setup-android@v3 currently fails because it installs retired 'tools'.
+      - name: Localizar Android SDK do runner
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK_MANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDK_MANAGER" && test -x "$SDK_MANAGER"
+          echo "$(dirname "$SDK_MANAGER")" >> "$GITHUB_PATH"
+
+      - name: Instalar SDK, NDK e CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.0.12433566" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/28.0.12433566" >> "$GITHUB_ENV"
+
+      - name: Ferramentas de compilação nativa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make automake autoconf libtool pkg-config ninja-build cmake curl
+
+      - name: Preparar customização vazia (sem chaves no repositório)
+        run: |
+          cp src/android/app/provider-customization.properties.example src/android/app/provider-customization.properties
+
+      - name: Compilar sandbox PRoot e Alpine
+        run: |
+          ./deps/build_proot.sh
+          ./scripts/prepare_android_sandbox.sh
+
+      - name: Compilar rclone para Android
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          ./deps/build_rclone_android.sh
+          mkdir -p src/android/app/libs
+          cp deps/build/rclone/rclone.aar src/android/app/libs/
+
+      # OpenMinis ships an unusually large Kotlin ChatViewModel.
+      # Default Gradle -Xmx2g causes Kotlin backend GC overhead OOM.
+      # Run compiler in-process to avoid two competing JVM heaps on 7GB runner.
+      - name: Ajustar memoria Kotlin no runner
+        run: |
+          cat >> src/android/gradle.properties <<'EOF'
+
+          # GitHub Actions only (file stays uncommitted)
+          org.gradle.jvmargs=-Xmx5g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
+          org.gradle.workers.max=1
+          org.gradle.parallel=false
+          kotlin.compiler.execution.strategy=in-process
+          EOF
+
+      - name: Testes da funcionalidade ALTIV Smart Router
+        working-directory: src/android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testGithubDebugUnitTest --tests "com.openminis.app.ui.settings.SmartRouterPlannerTest" --stacktrace
+
+      - name: Gerar APK Android ARM64
+        working-directory: src/android
+        run: ./gradlew :app:assembleGithubDebug --stacktrace
+
+      - name: Conferir APK e biblioteca PRoot
+        run: |
+          APK="$(find src/android/app/build/outputs/apk -type f -name '*.apk' | head -n1)"
+          test -n "$APK" && test -s "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libproot.so'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libproot-loader.so'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libproot-loader32.so'
+          sha256sum "$APK"
+
+      - name: Publicar APK de teste
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALTIV-SmartRouter-Android-ARM64
+          path: src/android/app/build/outputs/apk/github/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
