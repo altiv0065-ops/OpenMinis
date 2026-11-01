@@ -75,6 +75,20 @@ jobs:
           mkdir -p src/android/app/libs
           cp deps/build/rclone/rclone.aar src/android/app/libs/
 
+      # OpenMinis ships an unusually large Kotlin ChatViewModel.
+      # Default Gradle -Xmx2g causes Kotlin backend GC overhead OOM.
+      # Run compiler in-process to avoid two competing JVM heaps on 7GB runner.
+      - name: Ajustar memoria Kotlin no runner
+        run: |
+          cat >> src/android/gradle.properties <<'EOF'
+
+          # GitHub Actions only (file stays uncommitted)
+          org.gradle.jvmargs=-Xmx5g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
+          org.gradle.workers.max=1
+          org.gradle.parallel=false
+          kotlin.compiler.execution.strategy=in-process
+          EOF
+
       - name: Testes da funcionalidade ALTIV Smart Router
         working-directory: src/android
         run: |
